@@ -121,8 +121,8 @@ int main(int argc, char **argv)
 		fclose(f);
 		exit(0);
 	} else if (!strncmp(cert_src, "pkcs11:", 7)) {
-#ifdef OPENSSL_IS_BORINGSSL
-		ERR(1, "BoringSSL does not support extracting from PKCS#11");
+#if defined(OPENSSL_IS_BORINGSSL) || defined(OPENSSL_NO_ENGINE)
+		ERR(1, "this OpenSSL build does not support extracting from PKCS#11");
 		exit(1);
 #else
 		ENGINE *e;
