@@ -2734,6 +2734,24 @@ static int powered_update_hci(struct hci_request *req, unsigned long opt)
 				    sizeof(cp), &cp);
 	}
 
+	/*
+	 * Droidian: queue the BR/EDR setup (class, local name, EIR) BEFORE the LE advertising
+	 * setup. If the controller rejects an LE command (the Qualcomm vendor controller answers
+	 * LE Set Extended Scan Response Data with "Invalid HCI Command Parameters"), the HCI core
+	 * drops every command queued after it in this request; the local name was among them and
+	 * the controller kept an empty name, so remote devices showed the BD address instead.
+	 */
+	if (lmp_bredr_capable(hdev)) {
+		if (hci_dev_test_flag(hdev, HCI_FAST_CONNECTABLE))
+			__hci_req_write_fast_connectable(req, true);
+		else
+			__hci_req_write_fast_connectable(req, false);
+		__hci_req_update_scan(req);
+		__hci_req_update_class(req);
+		__hci_req_update_name(req);
+		__hci_req_update_eir(req);
+	}
+
 	if (hci_dev_test_flag(hdev, HCI_LE_ENABLED)) {
 		/* Make sure the controller has a good default for
 		 * advertising data. This also applies to the case
@@ -2776,17 +2794,6 @@ static int powered_update_hci(struct hci_request *req, unsigned long opt)
 	if (link_sec != test_bit(HCI_AUTH, &hdev->flags))
 		hci_req_add(req, HCI_OP_WRITE_AUTH_ENABLE,
 			    sizeof(link_sec), &link_sec);
-
-	if (lmp_bredr_capable(hdev)) {
-		if (hci_dev_test_flag(hdev, HCI_FAST_CONNECTABLE))
-			__hci_req_write_fast_connectable(req, true);
-		else
-			__hci_req_write_fast_connectable(req, false);
-		__hci_req_update_scan(req);
-		__hci_req_update_class(req);
-		__hci_req_update_name(req);
-		__hci_req_update_eir(req);
-	}
 
 	hci_dev_unlock(hdev);
 	return 0;
