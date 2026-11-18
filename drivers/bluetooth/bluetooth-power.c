@@ -458,6 +458,8 @@ static int bluetooth_power(int on)
 	struct regulator *reg = NULL;
 
 	BT_PWR_DBG("on: %d", on);
+	/* Droidian: always log chip power transitions and who requested them (HAL ioctl vs rfkill) */
+	pr_info("bluetooth_power: request on=%d by %s[%d]\n", on, current->comm, current->pid);
 
 	if (on == 1) {
 		// Power On
@@ -668,22 +670,22 @@ vdd_xtal_fail:
 		rc = -1;
 	}
 out:
+	pr_info("bluetooth_power: on=%d done rc=%d\n", on, rc);
 	return rc;
 }
 
 static int bluetooth_toggle_radio(void *data, bool blocked)
 {
-	int ret = 0;
-	int (*power_control)(int enable);
-
-	power_control =
-		((struct bluetooth_power_platform_data *)data)->bt_power_setup;
-
-	if (previous != blocked)
-		ret = (*power_control)(!blocked);
-	if (!ret)
-		previous = blocked;
-	return ret;
+	/*
+	 * Droidian: the vendor Bluetooth HAL (running in the Android container, driven through
+	 * bluebinder) owns the chip power via /dev/btpower. Cutting the regulators/GPIOs from this
+	 * rfkill when userspace soft-blocks Bluetooth (GNOME Settings does) pulls the power out from
+	 * under the HAL: it hangs, is killed and restarts, and the adapter takes seconds to come back
+	 * (the Settings switch-on then races with its retries). Only track the state here; blocking
+	 * hci0 (the other rfkill) already makes BlueZ close the adapter cleanly through the HAL.
+	 */
+	previous = blocked;
+	return 0;
 }
 
 static const struct rfkill_ops bluetooth_power_rfkill_ops = {
