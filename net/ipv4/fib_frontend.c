@@ -754,9 +754,19 @@ static int rtm_to_fib_config(struct net *net, struct sk_buff *skb,
 			cfg->fc_oif = nla_get_u32(attr);
 			break;
 		case RTA_GATEWAY:
-			has_gw = true;
-			cfg->fc_gw_family = AF_INET;
+			/*
+			 * Droidian: NetworkManager 1.52 evidently sends RTA_GATEWAY=0.0.0.0 for on-link
+			 * routes. Pre-5.2 kernels read that as "no gateway"; with fc_gw_family set, the
+			 * nexthop check looks up 0.0.0.0 and fails with ENETUNREACH ("Nexthop has invalid
+			 * gateway") whenever no default route exists yet, so NM could not install the
+			 * subnet/default route on Wi-Fi (reproduced with a raw netlink request).
+			 * Treat an all-zero gateway as "none" again.
+			 */
 			cfg->fc_gw4 = nla_get_be32(attr);
+			if (cfg->fc_gw4) {
+				has_gw = true;
+				cfg->fc_gw_family = AF_INET;
+			}
 			break;
 		case RTA_VIA:
 			has_via = true;
