@@ -10518,7 +10518,13 @@ static enum led_brightness aw8697_haptic_brightness_get(struct led_classdev *cde
     return aw8697->amplitude;
 }
 
-static void aw8697_haptic_brightness_set(struct led_classdev *cdev,
+/*
+ * bitra: this callback takes a mutex and does I2C transfers, so it may sleep. It used to be registered as
+ * ->brightness_set, which the LED core may call from atomic context (ledtrig-transient's timer calls
+ * led_set_brightness_nosleep() from softirq) -> "BUG: scheduling while atomic" and a hard hang.
+ * Register it as ->brightness_set_blocking instead; the core then runs it from a workqueue.
+ */
+static int aw8697_haptic_brightness_set(struct led_classdev *cdev,
                 enum led_brightness level)
 {
     int rtp_is_going_on = 0;
@@ -10528,7 +10534,7 @@ static void aw8697_haptic_brightness_set(struct led_classdev *cdev,
     rtp_is_going_on = aw8697_haptic_juge_RTP_is_going_on(aw8697);
     if (rtp_is_going_on)
     {
-        return ;
+        return 0;
     }
 
     aw8697->amplitude = level;
@@ -10543,6 +10549,7 @@ static void aw8697_haptic_brightness_set(struct led_classdev *cdev,
 
     mutex_unlock(&aw8697->lock);
 
+    return 0;
 }
 #endif
 
@@ -12967,7 +12974,7 @@ static int aw8697_vibrator_init(struct aw8697 *aw8697)
 #else
     aw8697->cdev.name = "vibrator";
     aw8697->cdev.brightness_get = aw8697_haptic_brightness_get;
-    aw8697->cdev.brightness_set = aw8697_haptic_brightness_set;
+    aw8697->cdev.brightness_set_blocking = aw8697_haptic_brightness_set;
 
     ret = devm_led_classdev_register(&aw8697->i2c->dev, &aw8697->cdev);
     if (ret < 0){
