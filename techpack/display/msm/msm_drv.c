@@ -1195,7 +1195,7 @@ static int msm_disable_all_modes(
 	return ret;
 }
 
-static void msm_lastclose(struct drm_device *dev)
+static void msm_lastclose_impl(struct drm_device *dev)
 {
 	struct msm_drm_private *priv = dev->dev_private;
 	struct msm_kms *kms = priv->kms;
@@ -1252,6 +1252,18 @@ fail:
 	}
 	drm_modeset_drop_locks(&ctx);
 	drm_modeset_acquire_fini(&ctx);
+}
+
+/*
+ * Droidian: DRM-core "last close" must NOT blank the panel. On Droidian plymouthd is the only DRM client
+ * until the Android composer starts (~4-7 s later); when it quits msm_lastclose() disabled every
+ * CRTC and powered the panel off, so the boot logo vanished and the screen stayed black until the
+ * composer lit it again. Android's SurfaceFlinger never closes the device, so this path never ran there.
+ * Keep the last frame on screen instead (the composer's first commit takes the display over, like a
+ * continuous splash). The shutdown path still calls msm_lastclose_impl() to power the display down.
+ */
+static void msm_lastclose(struct drm_device *dev)
+{
 }
 
 static irqreturn_t msm_irq(int irq, void *arg)
@@ -2260,7 +2272,7 @@ static void msm_pdev_shutdown(struct platform_device *pdev)
 		return;
 	}
 
-	msm_lastclose(ddev);
+	msm_lastclose_impl(ddev);
 
 	/* set this after lastclose to allow kickoff from lastclose */
 	priv->shutdown_in_progress = true;
