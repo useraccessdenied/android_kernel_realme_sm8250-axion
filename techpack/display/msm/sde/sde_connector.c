@@ -12,6 +12,7 @@
 #include "sde_connector.h"
 #include "sde_encoder.h"
 #include <linux/backlight.h>
+#include <linux/module.h>
 #include <linux/string.h>
 #include "dsi_drm.h"
 #include "dsi_display.h"
@@ -96,6 +97,47 @@ extern int dc_apollo_sync_hbmon(struct dsi_display *display);
 extern bool is_spread_backlight(struct dsi_display *display, int level);
 #endif
 
+/*
+ * bitra: userspace on this port (Droidian: gsd-power -> libdroid-leds -> Android lights HAL) writes the backlight in the
+ * 0..255 range, but the panel takes 0..2047. Without scaling the slider only ever reached 255/2047 (12%) of the panel.
+ * Expose a 0..BITRA_BL_UI_MAX sysfs range and map it to 0..bitra_bl_cap with a blend of a linear and a quadratic curve
+ * (x = ui/255, panel = cap * (mix*x + (1000-mix)*x^2) / 1000): gsd already applies a perceptual curve to the slider, the
+ * quadratic share only keeps the dim end dim. cap and mix are runtime-tunable (parameters bitra_bl_cap and bitra_bl_mix
+ * under /sys/module).
+ */
+#define BITRA_BL_UI_MAX 255
+static uint bitra_bl_cap = 1500;
+static uint bitra_bl_mix = 300;
+module_param(bitra_bl_cap, uint, 0644);
+MODULE_PARM_DESC(bitra_bl_cap, "panel brightness level (<=brightness_max_level) reached at UI brightness 255");
+module_param(bitra_bl_mix, uint, 0644);
+MODULE_PARM_DESC(bitra_bl_mix, "share (0..1000) of the linear term in the UI->panel curve, rest is quadratic");
+
+static int bitra_bl_map(int ui, int panel_max)
+{
+	u64 x, y;
+	int cap = clamp_t(int, bitra_bl_cap, 1, panel_max);
+	int mix = min_t(int, bitra_bl_mix, 1000);
+
+	if (ui <= 0)
+		return 0;
+	if (ui >= BITRA_BL_UI_MAX)
+		return cap;
+	x = div_u64((u64)ui * 1000000, BITRA_BL_UI_MAX);	/* x * 1e6 */
+	y = (u64)mix * x + div_u64((u64)(1000 - mix) * x * x, 1000000);	/* (mix*x + (1000-mix)*x^2) * 1e6 */
+	return max_t(int, 1, (int)div_u64(y * cap, 1000000000ULL));
+}
+
+static int bitra_bl_unmap(int panel, int panel_max)
+{
+	int ui;
+
+	for (ui = 0; ui < BITRA_BL_UI_MAX; ui++)
+		if (bitra_bl_map(ui, panel_max) >= panel)
+			break;
+	return ui;
+}
+
 static int sde_backlight_device_update_status(struct backlight_device *bd)
 {
 	int brightness;
@@ -117,6 +159,7 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 
 	c_conn = bl_get_data(bd);
 	display = (struct dsi_display *) c_conn->display;
+	brightness = bitra_bl_map(brightness, display->panel->bl_config.brightness_max_level);
 	if (brightness > display->panel->bl_config.bl_max_level)
 		brightness = display->panel->bl_config.bl_max_level;
 #ifdef OPLUS_BUG_STABILITY
@@ -276,11 +319,12 @@ static int sde_backlight_setup(struct sde_connector *c_conn,
 
 	display = (struct dsi_display *) c_conn->display;
 	bl_config = &display->panel->bl_config;
-	props.max_brightness = bl_config->brightness_max_level;
+	props.max_brightness = BITRA_BL_UI_MAX;
 #ifndef OPLUS_BUG_STABILITY
 	props.brightness = bl_config->brightness_max_level;
 #else
-	props.brightness = bl_config->brightness_default_level;
+	props.brightness = bitra_bl_unmap(bl_config->brightness_default_level,
+					  bl_config->brightness_max_level);
 #endif
 
 #ifdef OPLUS_BUG_STABILITY
